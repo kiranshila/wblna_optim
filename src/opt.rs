@@ -27,11 +27,13 @@ pub fn adam(
     let pb = mp.add(ProgressBar::new(max_iter as u64));
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("{prefix:.bold} {spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} obj={msg}")
+            .template("{prefix:.bold} {spinner:.green} [{bar:40.cyan/blue}] {pos:>4}/{len} {msg}")
             .unwrap()
             .progress_chars("=>-"),
     );
     pb.set_prefix(label.to_string());
+
+    let mut converged = false;
 
     for iter in 1..=max_iter {
         dx.fill(0.0);
@@ -57,13 +59,17 @@ pub fn adam(
         let grad_norm = grad_norm_sq.sqrt();
 
         pb.set_position(iter as u64);
-        pb.set_message(format!("{obj:.6} |g|={grad_norm:.2}"));
+        pb.set_message(format!("{obj:10.6} |g|={grad_norm:8.4}"));
 
         if (prev_obj - obj).abs() < tol {
-            pb.finish_with_message(format!("converged {obj:.6}"));
+            converged = true;
             break;
         }
     }
-    pb.finish_with_message(format!("final {obj:.6}"));
+    if converged {
+        pb.finish_with_message(format!("✓ {obj:10.6}  converged"));
+    } else {
+        pb.finish_with_message(format!("✗ {obj:10.6}  iter_max"));
+    }
     obj
 }
