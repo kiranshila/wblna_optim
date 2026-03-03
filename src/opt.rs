@@ -1,6 +1,6 @@
 use crate::cost::OptParams;
 use crate::cost::dcost;
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
 pub fn adam(
     p: &OptParams,
@@ -10,6 +10,8 @@ pub fn adam(
     lr: f64,
     max_iter: usize,
     tol: f64,
+    mp: &MultiProgress,
+    label: &str,
 ) -> f64 {
     let beta1 = 0.9_f64;
     let beta2 = 0.999_f64;
@@ -22,13 +24,14 @@ pub fn adam(
     let mut p_shadow = p.clone();
     let mut obj = f64::MAX;
 
-    let pb = ProgressBar::new(max_iter as u64);
+    let pb = mp.add(ProgressBar::new(max_iter as u64));
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} obj={msg}")
+            .template("{prefix:.bold} {spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} obj={msg}")
             .unwrap()
             .progress_chars("=>-"),
     );
+    pb.set_prefix(label.to_string());
 
     for iter in 1..=max_iter {
         dx.fill(0.0);
