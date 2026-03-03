@@ -1,11 +1,11 @@
+use crate::complex::C64;
 use anyhow::Result;
 use serde::Deserialize;
 use std::f64::consts::PI;
 use std::path::Path;
 
-use crate::complex::C64;
-
 const MU_0: f64 = 4e-7 * PI;
+const MAX_CHEBY: usize = 32;
 
 /// Chebyshev polynomial fit: f(w) = sum_k c_k T_k(u).
 #[derive(Debug, Clone, Deserialize)]
@@ -72,7 +72,12 @@ impl TLine {
     /// Load from a fit_coeffs.json file.
     pub fn load(path: &Path) -> Result<Self> {
         let file = std::fs::File::open(path)?;
-        Ok(serde_json::from_reader(file)?)
+        let tline: Self = serde_json::from_reader(file)?;
+        assert!(tline.c_fit.coeffs.len() <= MAX_CHEBY);
+        assert!(tline.l_fit.coeffs.len() <= MAX_CHEBY);
+        assert!(tline.strip_factor.coeffs.len() <= MAX_CHEBY);
+        assert!(tline.wall_factor.coeffs.len() <= MAX_CHEBY);
+        Ok(tline)
     }
 
     /// Width range (meters) over which the fits are valid.
@@ -110,12 +115,15 @@ impl TLine {
         let l = self.l(w);
         let g = self.g(w, freq);
         let c = self.c(w);
+
         let omega = 2.0 * PI * freq;
+
         let z_ser = C64::new(r, omega * l);
         let y_shu = C64::new(g, omega * c);
-        let zy = z_ser * y_shu;
+
+        // Careful math here to avoid multiple calls to hypot
         let zc = (z_ser / y_shu).sqrt();
-        let gamma = zy.sqrt();
+        let gamma = zc * y_shu;
         (zc, gamma)
     }
 
@@ -147,12 +155,61 @@ impl TLine {
         [ch, zc * sh, sh / zc, ch]
     }
 
-    /// Cascaded ABCD matrix for a sequence of widths at a given frequency,
-    /// each section having length `delta`.
+    fn eval_four(&self, w: f64) -> (f64, f64, f64, f64) {
+        let n = self.c_fit.coeffs.len();
+        let c0 = &self.c_fit.coeffs;
+        let l0 = &self.l_fit.coeffs;
+        let sf = &self.strip_factor.coeffs;
+        let wf = &self.wall_factor.coeffs;
+
+        let u = 2.0 * (w.ln() - self.c_fit.ln_w_min) / (self.c_fit.ln_w_max - self.c_fit.ln_w_min)
+            - 1.0;
+
+        let mut t_prev = 1.0f64;
+        let mut t_curr = u;
+        let mut rc = c0[0] + c0[1] * u;
+        let mut rl = l0[0] + l0[1] * u;
+        let mut rs = sf[0] + sf[1] * u;
+        let mut rw = wf[0] + wf[1] * u;
+        for k in 2..n {
+            let t_next = 2.0 * u * t_curr - t_prev;
+            rc += c0[k] * t_next;
+            rl += l0[k] * t_next;
+            rs += sf[k] * t_next;
+            rw += wf[k] * t_next;
+            t_prev = t_curr;
+            t_curr = t_next;
+        }
+        (rc, rl, rs, rw)
+    }
+
     pub fn cascade(&self, widths: &[f64], freq: f64, delta: f64) -> [C64; 4] {
+        let rs_strip = self.strip_material.rs(freq);
+        let rs_wall = self.enclosure_material.rs(freq);
+        let omega = 2.0 * PI * freq;
+        let g_factor = match (self.tan_delta, self.eps_r, self.dc_deps.is_some()) {
+            (Some(td), Some(er), true) => Some(omega * td * er),
+            _ => None,
+        };
+
+        let abcd_for = |w: f64| {
+            let (c, l, sf, wf) = self.eval_four(w);
+            let r = rs_strip * sf + rs_wall * wf;
+            let g = g_factor
+                .zip(self.dc_deps.as_ref())
+                .map_or(0.0, |(gf, dc)| gf * dc.eval(w));
+
+            let z_ser = C64::new(r, omega * l);
+            let y_shu = C64::new(g, omega * c);
+            let zc = (z_ser / y_shu).sqrt();
+            let gamma = (z_ser * y_shu).sqrt();
+            let (ch, sh) = (gamma * delta).cosh_sinh();
+            [ch, zc * sh, sh / zc, ch]
+        };
+
         let mut it = widths.iter();
-        let first = self.abcd(*it.next().expect("widths must be non-empty"), freq, delta);
-        it.fold(first, |acc, &w| mul(&acc, &self.abcd(w, freq, delta)))
+        let first = abcd_for(*it.next().expect("widths must be non-empty"));
+        it.fold(first, |acc, &w| mul(&acc, &abcd_for(w)))
     }
 }
 

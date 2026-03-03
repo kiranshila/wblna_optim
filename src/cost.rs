@@ -27,8 +27,25 @@ pub struct OptParams {
     pub z0: f64,
 }
 
-#[autodiff_reverse(dcost, Duplicated, Duplicated, Active)]
-pub fn cost(p: &OptParams, ln_widths: &[f64]) -> f64 {
+#[autodiff_reverse(dcost_widths, Duplicated, Duplicated, Active)]
+pub fn cost_widths(p: &OptParams, widths: &[f64]) -> f64 {
+    mean_te(&p.tline, widths, p.length, &p.target, p.z0)
+}
+
+// Called by adam — applies chain rule for log-space manually
+pub fn dcost(
+    p: &OptParams,
+    p_shadow: &mut OptParams,
+    ln_widths: &[f64],
+    dx: &mut [f64],
+    seed: f64,
+) -> f64 {
     let widths: Vec<f64> = ln_widths.iter().map(|&u| u.exp()).collect();
-    mean_te(&p.tline, &widths, p.length, &p.target, p.z0)
+    let mut dwidths = vec![0.0; ln_widths.len()];
+    let obj = dcost_widths(p, p_shadow, &widths, &mut dwidths, seed);
+    // chain rule: d(cost)/d(ln_w) = d(cost)/dw * dw/d(ln_w) = grad_w * w
+    for (dx_i, (&dw, &w)) in dx.iter_mut().zip(dwidths.iter().zip(widths.iter())) {
+        *dx_i = dw * w;
+    }
+    obj
 }

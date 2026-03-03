@@ -107,6 +107,7 @@
       packages = with pkgs; [
         cargo-nextest
         cargo-expand
+        cargo-flamegraph
         (python3.withPackages (ps: [ps.matplotlib ps.numpy]))
       ];
     };
